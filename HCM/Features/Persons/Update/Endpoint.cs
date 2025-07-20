@@ -6,6 +6,7 @@ using MediatR;
 using Microsoft.Extensions.Logging;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.EntityFrameworkCore;
+using HCM.Features.Persons.GetById;
 
 namespace HCM.Features.Persons.Update;
 
