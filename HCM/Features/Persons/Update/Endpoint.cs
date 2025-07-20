@@ -1,23 +1,26 @@
 ﻿using System.Security.Claims;
 using FastEndpoints;
 using HCM.Domain.Identity;
-using HCM.Domain.Persons;
-using HCM.Infrastructure;
 using HCM.Shared.Contracts;
+using MediatR;
+using Microsoft.Extensions.Logging;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.EntityFrameworkCore;
+using HCM.Features.Persons.GetById;
 
 namespace HCM.Features.Persons.Update;
 
-public sealed class Endpoint :  Endpoint<UpdatePersonRequest,PersonResponse>
+public sealed class Endpoint : Endpoint<UpdatePersonRequest, PersonResponse>
 {
-    private readonly ApplicationDbContext context;
+    private readonly IMediator mediator;
     private readonly IAuthorizationService authorizationService;
-    
-    public Endpoint(ApplicationDbContext context, IAuthorizationService authorizationService)
+    private readonly ILogger<Endpoint> logger;
+
+    public Endpoint(IMediator mediator, IAuthorizationService authorizationService, ILogger<Endpoint> logger)
     {
-        this.context = context;
+        this.mediator = mediator;
         this.authorizationService = authorizationService;
+        this.logger = logger;
     }
     
     public override void Configure()
@@ -28,25 +31,37 @@ public sealed class Endpoint :  Endpoint<UpdatePersonRequest,PersonResponse>
     
     public override async Task HandleAsync(UpdatePersonRequest req, CancellationToken ct)
     {
-        var person = await context.Persons.FirstOrDefaultAsync(p => p.Id == req.PersonId, cancellationToken: ct);
-        if (person == null)
+        try
         {
-            await SendNotFoundAsync(ct);
-            return;
+            var getResult = await mediator.Send(new GetPersonByIdQuery(req.PersonId), ct);
+            if (getResult.IsFailure)
+            {
+                await SendNotFoundAsync(ct);
+                return;
+            }
+
+            var person = getResult.Value;
+            var auth = await authorizationService.AuthorizeAsync(User, person, "CanEditPerson");
+            if (!auth.Succeeded)
+            {
+                await SendForbiddenAsync(ct);
+                return;
+            }
+
+            var updateResult = await mediator.Send(new UpdatePersonCommand(req, User.FindFirstValue(ClaimTypes.Role)!), ct);
+
+            if (updateResult.IsFailure)
+            {
+                await SendResultAsync(Results.Problem(detail: updateResult.Error.Description, statusCode: updateResult.Error.Code));
+                return;
+            }
+
+            await SendOkAsync(updateResult.Value, ct);
         }
-        
-        var result = await authorizationService.AuthorizeAsync(User, person, "CanEditPerson");
-        
-        if (!result.Succeeded)
+        catch (Exception ex)
         {
-            await SendForbiddenAsync(ct);
-            return;
+            logger.LogError(ex, "Error updating person");
+            ThrowError("An unexpected error occurred");
         }
-        
-        person.Update(req, User.FindFirstValue(ClaimTypes.Role)!);
-        
-        await context.SaveChangesAsync(ct);
-        
-        await SendOkAsync(person.ToPersonResponse(), ct);
     }
 }
