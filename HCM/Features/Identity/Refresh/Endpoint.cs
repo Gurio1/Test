@@ -1,20 +1,18 @@
 using FastEndpoints;
 using HCM.Domain.Identity.RefreshTokens;
-using HCM.Infrastructure;
-using Microsoft.EntityFrameworkCore;
+using MediatR;
+using Microsoft.Extensions.Logging;
 
 namespace HCM.Features.Identity.Refresh;
 
 public sealed class Endpoint : EndpointWithoutRequest
 {
-    private readonly TokenIssuer tokenIssuer;
-    private readonly ApplicationDbContext context;
+    private readonly IMediator mediator;
     private readonly ILogger<Endpoint> logger;
-    
-    public Endpoint(TokenIssuer tokenIssuer,ApplicationDbContext context, ILogger<Endpoint> logger)
+
+    public Endpoint(IMediator mediator, ILogger<Endpoint> logger)
     {
-        this.tokenIssuer = tokenIssuer;
-        this.context = context;
+        this.mediator = mediator;
         this.logger = logger;
     }
     
@@ -27,36 +25,30 @@ public sealed class Endpoint : EndpointWithoutRequest
     public override async Task HandleAsync(CancellationToken ct)
     {
         string? cookieRefreshToken = HttpContext.Request.Cookies["refreshToken"];
-        
+
         if (string.IsNullOrEmpty(cookieRefreshToken))
         {
             await SendUnauthorizedAsync(ct);
             return;
         }
-        
-        var storedRefreshToken = await context.RefreshTokens
-            .FirstOrDefaultAsync(t => t.Token == cookieRefreshToken, cancellationToken: ct);
-        
-        if (!RefreshTokenValidator.IsRefreshTokenValid(storedRefreshToken))
+
+        try
         {
-            await SendUnauthorizedAsync(ct);
-            return;
+            var result = await mediator.Send(new RefreshTokenCommand(cookieRefreshToken), ct);
+            if (result.IsFailure)
+            {
+                await SendUnauthorizedAsync(ct);
+                return;
+            }
+
+            var tokenPair = result.Value;
+            AuthCookieWriter.SetRefreshTokenCookie(HttpContext, tokenPair.RefreshToken);
+            await SendOkAsync(tokenPair.ToAuthResponse(), cancellation: ct);
         }
-        
-        var user = await context.Persons
-            .AsNoTracking()
-            .SingleOrDefaultAsync(u => u.Id == storedRefreshToken!.PersonId, cancellationToken: ct);
-        
-        if (user is null)
+        catch (Exception ex)
         {
-            await SendUnauthorizedAsync(ct);
-            return;
+            logger.LogError(ex, "Error refreshing token");
+            ThrowError("An unexpected error occurred");
         }
-        
-        var tokenPair = await tokenIssuer.IssueNewTokensAsync(user, storedRefreshToken, ct);
-        
-        AuthCookieWriter.SetRefreshTokenCookie(HttpContext, tokenPair.RefreshToken);
-        
-        await SendOkAsync(tokenPair.ToAuthResponse(), cancellation: ct);
     }
 }

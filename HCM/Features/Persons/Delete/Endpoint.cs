@@ -1,15 +1,20 @@
 ﻿using FastEndpoints;
 using HCM.Domain.Identity;
-using HCM.Infrastructure;
-using Microsoft.EntityFrameworkCore;
+using MediatR;
+using Microsoft.Extensions.Logging;
 
 namespace HCM.Features.Persons.Delete;
 
 public sealed class Endpoint : Endpoint<DeletePersonRequest>
 {
-    private readonly ApplicationDbContext context;
-    
-    public Endpoint(ApplicationDbContext context) => this.context = context;
+    private readonly IMediator mediator;
+    private readonly ILogger<Endpoint> logger;
+
+    public Endpoint(IMediator mediator, ILogger<Endpoint> logger)
+    {
+        this.mediator = mediator;
+        this.logger = logger;
+    }
     
     public override void Configure()
     {
@@ -19,17 +24,22 @@ public sealed class Endpoint : Endpoint<DeletePersonRequest>
     
     public override async Task HandleAsync(DeletePersonRequest req, CancellationToken ct)
     {
-        var person = await context.Persons
-            .FirstOrDefaultAsync(p => p.Id == req.PersonId, ct);
-        if (person == null)
+        try
         {
-            await SendNotFoundAsync(ct);
-            return;
+            var result = await mediator.Send(new DeletePersonCommand(req.PersonId), ct);
+            if (result.IsFailure)
+            {
+                await SendResultAsync(
+                    Results.Problem(detail: result.Error.Description, statusCode: result.Error.Code));
+                return;
+            }
+
+            await SendNoContentAsync(ct);
         }
-        
-        context.Persons.Remove(person);
-        await context.SaveChangesAsync(ct);
-        
-        await SendNoContentAsync(ct);
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "Error deleting person");
+            ThrowError("An unexpected error occurred");
+        }
     }
 }
