@@ -1,21 +1,20 @@
 ﻿using FastEndpoints;
 using HCM.Domain.Identity;
-using HCM.Domain.Persons;
-using HCM.Shared;
 using HCM.Shared.Contracts;
-using Microsoft.AspNetCore.Identity;
+using MediatR;
+using Microsoft.Extensions.Logging;
 
 namespace HCM.Features.Persons.Create;
 
-public sealed class Endpoint : Endpoint<CreatePersonRequest,PersonResponse>
+public sealed class Endpoint : Endpoint<CreatePersonRequest, PersonResponse>
 {
-    private readonly PersonCreator personCreator;
-    private readonly IPasswordHasher<Person> passwordHasher;
-    
-    public Endpoint(PersonCreator personCreator,IPasswordHasher<Person> passwordHasher)
+    private readonly IMediator mediator;
+    private readonly ILogger<Endpoint> logger;
+
+    public Endpoint(IMediator mediator, ILogger<Endpoint> logger)
     {
-        this.personCreator = personCreator;
-        this.passwordHasher = passwordHasher;
+        this.mediator = mediator;
+        this.logger = logger;
     }
     
     public override void Configure()
@@ -30,24 +29,29 @@ public sealed class Endpoint : Endpoint<CreatePersonRequest,PersonResponse>
     
     public override async Task HandleAsync(CreatePersonRequest req, CancellationToken ct)
     {
-        var person = Person.Create(req.FirstName, req.LastName, req.Email, req.JobTitle, req.Salary, req.Department,
-            req.Role, passwordHasher, req.Password);
-        
-        var personCreationResult = await personCreator.Create(person, ct);
-        
-        if (personCreationResult.IsFailure)
+        try
         {
-            await SendResultAsync(
-                Results.Problem(
-                    detail:    personCreationResult.Error.Description,
-                    statusCode: personCreationResult.Error.Code
-                )
-            );
-            return;
+            var result = await mediator.Send(new CreatePersonCommand(req), ct);
+
+            if (result.IsFailure)
+            {
+                await SendResultAsync(
+                    Results.Problem(
+                        detail: result.Error.Description,
+                        statusCode: result.Error.Code
+                    )
+                );
+                return;
+            }
+
+            await SendCreatedAtAsync<GetById.Endpoint>(
+                new { id = result.Value.Id },
+                result.Value, cancellation: ct);
         }
-        
-        await SendCreatedAtAsync<GetById.Endpoint>(
-            new { id = person.Id },
-            person.ToPersonResponse(), cancellation: ct);
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "Unexpected error while creating person");
+            ThrowError("An unexpected error occurred");
+        }
     }
 }
