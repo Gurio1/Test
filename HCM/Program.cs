@@ -11,6 +11,7 @@ using HCM.Infrastructure;
 using HCM.Shared;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Identity;
+using Prometheus;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -68,6 +69,8 @@ builder.Services.AddCors(options =>
 
 var app = builder.Build();
 
+app.UseHttpMetrics();
+
 app.UseCors("AllowSpecificOrigin");
 
 
@@ -75,5 +78,7 @@ app.UseAuthentication()
     .UseAuthorization()
     .UseFastEndpoints(c => c.Security.RoleClaimType = ClaimTypes.Role)
     .UseSwaggerGen();
+
+app.MapMetrics();
 
 app.Run();
